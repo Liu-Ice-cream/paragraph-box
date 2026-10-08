@@ -1,0 +1,107 @@
+{
+  "synthetic_files": 1000,
+  "indexed_files": 900,
+  "paragraphs": 9000,
+  "runs_per_case": 5,
+  "scope": "Independent connections, recent-index reuse, keyword matching, ranking and unchanged Flow formatting; excludes Python process startup and UI rendering",
+  "stage_scope": "query_ms includes SQLite execute/fetch; ranking_ms includes score calculation and top-result selection; result_ms builds selected SearchHit objects",
+  "cases": [
+    {
+      "case": "broad",
+      "matched": 9000,
+      "returned": 30,
+      "baseline_pipeline_median_ms": 140.63,
+      "current_pipeline_median_ms": 56.9,
+      "baseline_search_median_ms": 133.46,
+      "current_search_median_ms": 50.96,
+      "current_format_median_ms": 2.0,
+      "current_stage_medians_ms": {
+        "query_ms": 29.28,
+        "ranking_ms": 21.52,
+        "result_ms": 0.08
+      }
+    },
+    {
+      "case": "alias",
+      "matched": 4500,
+      "returned": 30,
+      "baseline_pipeline_median_ms": 98.38,
+      "current_pipeline_median_ms": 39.8,
+      "baseline_search_median_ms": 91.67,
+      "current_search_median_ms": 31.16,
+      "current_format_median_ms": 2.27,
+      "current_stage_medians_ms": {
+        "query_ms": 18.56,
+        "ranking_ms": 12.47,
+        "result_ms": 0.13
+      }
+    },
+    {
+      "case": "sparse",
+      "matched": 10,
+      "returned": 10,
+      "baseline_pipeline_median_ms": 58.26,
+      "current_pipeline_median_ms": 58.11,
+      "baseline_search_median_ms": 33.54,
+      "current_search_median_ms": 33.57,
+      "current_format_median_ms": 6.01,
+      "current_stage_medians_ms": {
+        "query_ms": 32.73,
+        "ranking_ms": 0.49,
+        "result_ms": 0.26
+      }
+    },
+    {
+      "case": "heading",
+      "matched": 9000,
+      "returned": 30,
+      "baseline_pipeline_median_ms": 173.67,
+      "current_pipeline_median_ms": 84.31,
+      "baseline_search_median_ms": 167.69,
+      "current_search_median_ms": 77.01,
+      "current_format_median_ms": 3.85,
+      "current_stage_medians_ms": {
+        "query_ms": 45.19,
+        "ranking_ms": 31.44,
+        "result_ms": 0.17
+      }
+    },
+    {
+      "case": "unicode",
+      "matched": 53,
+      "returned": 30,
+      "baseline_pipeline_median_ms": 13.98,
+      "current_pipeline_median_ms": 8.51,
+      "baseline_search_median_ms": 6.22,
+      "current_search_median_ms": 3.53,
+      "current_format_median_ms": 1.95,
+      "current_stage_medians_ms": {
+        "query_ms": 3.19,
+        "ranking_ms": 0.25,
+        "result_ms": 0.07
+      }
+    },
+    {
+      "case": "no_match",
+      "matched": 0,
+      "returned": 0,
+      "baseline_pipeline_median_ms": 7.82,
+      "current_pipeline_median_ms": 6.32,
+      "baseline_search_median_ms": 3.6,
+      "current_search_median_ms": 2.72,
+      "current_format_median_ms": 0.0,
+      "current_stage_medians_ms": {
+        "query_ms": 2.67,
+        "ranking_ms": 0.03,
+        "result_ms": 0.0
+      }
+    }
+  ],
+  "broad_search_memory": {
+    "baseline_peak_bytes": 14248950,
+    "current_peak_bytes": 600777
+  },
+  "checks": "Scores, stable order, ContextData and JSON actions identical to baseline across all cases",
+  "baseline_version": "0.2.3",
+  "measurement_note": "Historical synthetic benchmark before the repository was rebuilt; baseline commit is not included in the new history."
+}

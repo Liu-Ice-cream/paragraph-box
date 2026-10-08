@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.cache/
+.venv/
+config.json
+dist/
+.runtime/
+
+# Local credentials, indexed content, logs, and private backups.
+.env
+.env.*
+*.log
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.pem
+*.key
+*.pfx
+*.p12
+*.bundle
+*.bak
+config.local*.json
+config.backup*.json
+.idea/
+.vscode/

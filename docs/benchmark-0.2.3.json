@@ -1,0 +1,33 @@
+{
+  "synthetic_files": 1000,
+  "indexed_files": 900,
+  "initial_paragraphs": 9000,
+  "first_query_ms": 1449.1,
+  "first_sync_timings_ms": {
+    "lock": 0.02,
+    "scan": 294.14,
+    "read": 659.24,
+    "parse": 136.92,
+    "database": 79.81,
+    "other": 40.38
+  },
+  "recent_query_median_ms": 155.9,
+  "recent_query_max_ms": 240.4,
+  "rebuild_ms": 1066.2,
+  "rebuild_timings_ms": {
+    "lock": 0.03,
+    "scan": 258.74,
+    "read": 543.97,
+    "parse": 115.48,
+    "database": 78.03,
+    "other": 61.81
+  },
+  "measurement_scope": "independent SQLite connections; includes sync and ranking; excludes Python startup and Flow UI",
+  "checks": "recent reuse and real expiry, exclusions, additions, changes, deletions, rebuild equivalence passed",
+  "baseline_first_query_ms": 3793.8,
+  "baseline_warm_median_ms": 438.3,
+  "baseline_warm_max_ms": 570.1,
+  "cold_comparison_note": "baseline runs first; filesystem cache can affect cold results; no cold speedup inferred",
+  "baseline_version": "0.2.2",
+  "measurement_note": "Historical synthetic benchmark before the repository was rebuilt; baseline commit is not included in the new history."
+}

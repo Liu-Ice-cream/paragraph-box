@@ -1,0 +1,11 @@
+{
+  "ID": "fb9e8d6a-303e-4b64-9b54-c458f0a9eec2",
+  "ActionKeyword": "sn",
+  "Name": "段落匣 · ParagraphBox",
+  "Description": "本地 Markdown/TXT 段落搜索，支持目录别名和带出处摘录。",
+  "Author": "Liu-Ice-cream",
+  "Version": "0.2.5",
+  "Language": "python",
+  "IcoPath": "Images\\app.svg",
+  "ExecuteFileName": "main.py"
+}
