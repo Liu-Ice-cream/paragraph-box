@@ -53,6 +53,9 @@ def dispatch(request: Any, plugin: ParagraphPlugin) -> dict[str, Any] | None:
     if method == "open_config" and not params:
         plugin.open_config()
         return None
+    if method == "open_diagnostics" and not params:
+        plugin.open_config(diagnostics=True)
+        return None
     raise ValueError(f"不支持的方法或参数数量：{method}")
 
 
@@ -85,7 +88,13 @@ def main() -> int:
     commands.add_argument("--query", metavar="关键词", help="模拟 Flow 查询，不打开文件")
     commands.add_argument("--index", action="store_true", help="更新磁盘索引并报告统计")
     commands.add_argument("--check", action="store_true", help="检查配置和 Python 环境")
+    commands.add_argument("--doctor", action="store_true", help="运行脱敏检查；不扫描真实资料")
     args = parser.parse_args()
+    if args.doctor:
+        from paragraph_search.diagnostics import diagnostic_summary, run_checks
+        report = run_checks(BASE)
+        print(diagnostic_summary(report))
+        return 1 if report["automatic_status"] == "fail" else 0
     try:
         if args.query is not None:
             output({"result": plugin.query(args.query)}, pretty=True)

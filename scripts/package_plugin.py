@@ -16,6 +16,7 @@ PACKAGE_FILES = (
     "paragraph_search/engine.py", "paragraph_search/matching.py",
     "paragraph_search/plugin.py", "paragraph_search/settings.py",
     "paragraph_search/settings_server.py", "Images/app.svg",
+    "paragraph_search/diagnostics.py", "samples/diagnostics/人工样例.txt",
     "samples/work/项目记录.txt", "samples/writing/雨夜素材.md",
     "ui/app.css", "ui/app.js", "ui/index.html", "ui/type.css",
     "Themes/ParagraphBox Mint.xaml",
@@ -26,6 +27,8 @@ PACKAGE_FILES = (
     "docs/paragraphbox-settings.jpg", "docs/verification-0.2.1.md",
     "docs/verification-0.2.2.md", "docs/verification-0.2.3.md",
     "docs/verification-0.2.4.md", "docs/verification-0.2.5.md",
+    "docs/verification-0.2.6.md",
+    "docs/paragraphbox-diagnostics.jpg",
     "docs/publication.md",
 )
 

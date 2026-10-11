@@ -67,6 +67,43 @@ class SettingsServerTests(unittest.TestCase):
         self.assertEqual(data['search_status']['search']['matched'], 1)
         self.assertGreaterEqual(data['search_status']['duration_ms'], 0)
 
+    def test_diagnostics_reachable_with_broken_config_and_safe_summary(self):
+        from paragraph_search.diagnostics import DEMO_NAME, DEMO_TEXT
+        sample = self.base / 'samples/diagnostics' / DEMO_NAME
+        sample.parent.mkdir(parents=True)
+        sample.write_text(DEMO_TEXT, encoding='utf-8')
+        (self.base / 'config.json').write_text('{ PRIVATE-CONFIG-CANARY', encoding='utf-8')
+        self.assertEqual(self.request('/api/config')[0], 400)
+        status, data, _ = self.request('/api/diagnostics', {})
+        self.assertEqual(status, 200)
+        self.assertEqual(data['report']['automatic_status'], 'fail')
+        summary = data['summary']
+        self.assertNotIn(str(self.base), summary)
+        self.assertNotIn(self.server.token, summary)
+        self.assertNotIn('PRIVATE-CONFIG-CANARY', json.dumps(data))
+        self.assertTrue(all(value == 'pending' for value in json.loads(summary)['manual'].values()))
+        self.assertEqual(self.request('/api/demo', {})[1]['source'], '人工样例.txt · 第 3 行')
+        self.assertFalse((self.base / '.cache/index.sqlite3').exists())
+
+    def test_diagnostic_actions_require_auth_and_refuse_arbitrary_paths(self):
+        from paragraph_search.diagnostics import DEMO_NAME, DEMO_TEXT
+        sample = self.base / 'samples/diagnostics' / DEMO_NAME
+        sample.parent.mkdir(parents=True)
+        sample.write_text(DEMO_TEXT, encoding='utf-8')
+        for route in ('/api/diagnostics', '/api/demo', '/api/demo-open'):
+            self.assertEqual(self.request(route, {}, auth=False)[0], 401)
+            self.assertEqual(self.request(route, {}, headers={'Origin':'https://example.com'})[0], 403)
+            self.assertEqual(self.request(route, {'path':str(self.base / 'notes/记录.md')})[0], 400)
+        with patch('paragraph_search.settings_server.open_text_file') as opened:
+            status, data, _ = self.request('/api/demo-open', {})
+        self.assertEqual(status, 200)
+        self.assertEqual(data, {'requested':True})
+        opened.assert_called_once_with(sample.resolve())
+        with patch('paragraph_search.settings_server.open_text_file', side_effect=PermissionError('PRIVATE-PATH-CANARY')):
+            status, data, _ = self.request('/api/demo-open', {})
+        self.assertEqual(status, 400)
+        self.assertNotIn('PRIVATE-PATH-CANARY', json.dumps(data))
+
     def context_request(self, hit):
         data = hit['ContextData']
         return {name:data[name] for name in ('path','alias','line_start','line_end')} | {

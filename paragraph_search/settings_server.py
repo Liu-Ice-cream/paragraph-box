@@ -22,6 +22,7 @@ import webbrowser
 from .plugin import ParagraphPlugin, open_text_file, find_vscode
 from .engine import ParagraphIndex, index_signature
 from .settings import ConfigValidationError, config_path, ensure_config, load_settings, read_document, save_document
+from .diagnostics import diagnostic_summary, demo_path, run_checks, sample_result
 
 
 class SettingsServer(ThreadingHTTPServer):
@@ -211,6 +212,23 @@ class SettingsHandler(BaseHTTPRequestHandler):
                 return
             body = json.loads(self.rfile.read(length))
             route = urlsplit(self.path).path
+            if route in {"/api/diagnostics", "/api/demo", "/api/demo-open"}:
+                if body != {}:
+                    self._json(400, {"error": "运行检查与样例操作不接受额外参数。"})
+                    return
+                # Errors from these endpoints never echo local paths or text.
+                try:
+                    if route == "/api/diagnostics":
+                        report = run_checks(self.server.base, active_version=self.server.version)
+                        self._json(200, {"report": report, "summary": diagnostic_summary(report)})
+                    elif route == "/api/demo":
+                        self._json(200, sample_result(self.server.base))
+                    else:
+                        open_text_file(demo_path(self.server.base))
+                        self._json(200, {"requested": True})
+                except Exception:
+                    self._json(400, {"error": "人工样例操作失败，请重新运行检查；错误代码：DEMO_ACTION_FAILED。"})
+                return
             if route == "/api/config":
                 save_document(self.server.base, body)
                 self._json(200, self._document())
@@ -253,11 +271,12 @@ class SettingsHandler(BaseHTTPRequestHandler):
             self._json(400, {"error": str(exc), "issues": exc.issues if isinstance(exc, ConfigValidationError) else []})
 
 
-def start_ui(base: Path, *, open_browser: bool = True) -> None:
+def start_ui(base: Path, *, open_browser: bool = True, diagnostics: bool = False) -> None:
     base = Path(base).resolve()
     home = Path(os.environ.get("PARAGRAPH_SEARCH_HOME", str(base / ".cache")))
     home.mkdir(parents=True, exist_ok=True)
     state_path = home / "settings-ui.json"
+    page = "/?view=diagnostics#" if diagnostics else "/#"
     try:
         old = json.loads(state_path.read_text(encoding="utf-8"))
         origin = old["origin"]
@@ -271,9 +290,9 @@ def start_ui(base: Path, *, open_browser: bool = True) -> None:
         current_version = json.loads((base / "plugin.json").read_text(encoding="utf-8-sig"))["Version"]
         if health.get("base") == str(base) and health.get("service") == "paragraphbox-settings" and health.get("version") == current_version:
             if open_browser:
-                webbrowser.open(origin + "/#" + old["token"])
+                webbrowser.open(origin + page + old["token"])
             else:
-                print(json.dumps({"url": origin + "/#" + old["token"]}), flush=True)
+                print(json.dumps({"url": origin + page + old["token"]}), flush=True)
             return
     except (OSError, ValueError, TypeError, KeyError, urllib.error.URLError):
         pass
@@ -281,9 +300,9 @@ def start_ui(base: Path, *, open_browser: bool = True) -> None:
     state = {"origin": server.origin, "token": server.token, "pid": os.getpid()}
     state_path.write_text(json.dumps(state), encoding="utf-8")
     if open_browser:
-        webbrowser.open(server.url)
+        webbrowser.open(server.origin + page + server.token)
     else:
-        print(json.dumps({"url": server.url}), flush=True)
+        print(json.dumps({"url": server.origin + page + server.token}), flush=True)
 
     def stop_when_idle() -> None:
         while time.monotonic() - server.last_activity < 1800:

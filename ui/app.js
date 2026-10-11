@@ -1,6 +1,7 @@
 "use strict";
 
 const $ = selector => document.querySelector(selector);
+const requestedView = new URLSearchParams(location.search).get("view");
 const hashToken = location.hash.slice(1);
 const hasSessionToken = /^[A-Za-z0-9_-]{43}$/.test(hashToken);
 const token = hasSessionToken ? hashToken : sessionStorage.getItem("paragraphbox-token") || "";
@@ -62,7 +63,7 @@ function updateDirty() {
   const dirty = Boolean(isDirty());
   $("#save").disabled = busy || !saved || !dirty;
   $("#revert").disabled = busy || !dirty;
-  $("#save-status").lastChild.textContent = dirty ? "有更改尚未保存" : "已与当前配置同步";
+  $("#save-status").lastChild.textContent = !saved ? "配置尚未加载" : dirty ? "有更改尚未保存" : "已与当前配置同步";
   const count = document.querySelectorAll(".root-row").length;
   $("#root-count").textContent = String(count); $("#empty-roots").hidden = count > 0;
   $("#rebuild-index").disabled = busy || !saved || dirty;
@@ -132,6 +133,10 @@ function rootRow(root, exists = true) {
   return row;
 }
 function render(data) {
+  if (doctorReport && serverData && JSON.stringify(serverData.config) !== JSON.stringify(data.config)) {
+    resetDoctor(); $("#doctor-state").textContent = "需要重新检查";
+    $("#doctor-status").textContent = "已保存配置发生变化，请重新运行检查并确认操作。";
+  }
   serverData = data;
   const config = data.config;
   saved = {roots: config.roots.map(root => ({alias: root.alias, path: root.path, exclude_dirs: root.exclude_dirs || []})), max_results: config.max_results ?? 30, max_file_bytes: config.max_file_bytes ?? 2000000, editor: config.editor ?? "default"};
@@ -395,4 +400,103 @@ $("#open-config-file").addEventListener("click", async () => { try { await api("
 function updateNavigation() { const hash = location.hash || "#directories"; document.querySelectorAll(".nav-item").forEach(link => link.classList.toggle("active", link.getAttribute("href") === hash)); }
 window.addEventListener("hashchange", updateNavigation); updateNavigation();
 window.addEventListener("beforeunload", event => { if (isDirty()) { event.preventDefault(); event.returnValue = ""; } });
-api("/api/config").then(render).catch(error => { notice(error.message); $("#summary-note").textContent = "请重新打开设置，或使用页尾的配置文件入口修复。"; });
+api("/api/config").then(render).catch(() => {
+  notice("资料配置无法加载。请运行检查，再从页尾“编辑配置文件”修复并重新打开设置。");
+  $("#summary-note").textContent = "配置暂不可用；运行检查和人工样例仍可使用。";
+  $("#index-state").textContent = "无法读取"; $("#index-note").textContent = "修复资料配置后，重新打开设置查看索引状态。";
+  document.querySelectorAll("#add-root, #preferences input, #preferences select, #preview-form input, #preview-form button, [data-query]").forEach(field => { field.disabled = true; });
+  updateDirty();
+});
+
+let doctorReport = null;
+let doctorSummary = null;
+let demoData = null;
+let doctorNumber = 0;
+const manualIds = ["open_file", "paste_excerpt", "flow_entry"];
+function resetDoctor() {
+  ++doctorNumber;
+  doctorReport = doctorSummary = demoData = null;
+  $("#doctor-checks").replaceChildren(); $("#doctor-summary").value = "";
+  $("#doctor-copy").disabled = true;
+  $("#doctor-run").disabled = $("#demo-search").disabled = false;
+  $("#demo-result").hidden = true;
+  $("#demo-citation").hidden = true; $("#demo-citation").value = "";
+  $("#demo-open").disabled = $("#demo-copy").disabled = true;
+  manualIds.forEach(id => { const field = $(`#manual-${id}`); field.checked = false; field.disabled = true; });
+}
+function updateDoctorSummary() {
+  if (!doctorSummary) return;
+  const document = structuredClone(doctorSummary);
+  manualIds.forEach(id => { document.manual[id] = $(`#manual-${id}`).checked ? "user_confirmed" : "pending"; });
+  $("#doctor-summary").value = JSON.stringify(document, null, 2);
+  const count = manualIds.filter(id => $(`#manual-${id}`).checked).length;
+  $("#doctor-state").textContent = doctorReport.automatic_status === "fail" ? "自动检查发现问题" : "自动检查通过";
+  $("#doctor-status").textContent = `手动确认 ${count}/3 项。仅勾选你实际完成的操作；确认只保留在当前页面。`;
+}
+async function runDoctor() {
+  resetDoctor(); $("#doctor-run").disabled = true; $("#demo-search").disabled = true;
+  const number = doctorNumber;
+  $("#doctor-state").textContent = "正在检查";
+  $("#doctor-status").textContent = "检查环境与人工样例，不检索你的真实资料。";
+  try {
+    const data = await api("/api/diagnostics", {});
+    if (number !== doctorNumber) return;
+    doctorReport = data.report; doctorSummary = JSON.parse(data.summary);
+    $("#version").textContent = `ParagraphBox · v${doctorReport.version}`;
+    $("#doctor-checks").replaceChildren(...doctorReport.checks.map(check => {
+      const row = document.createElement("li"), heading = document.createElement("div"), label = document.createElement("strong"), state = document.createElement("span"), advice = document.createElement("p");
+      row.className = `doctor-check ${check.status}`;
+      label.textContent = check.label; state.textContent = {pass: "通过", fail: "需处理", pending: "待确认"}[check.status];
+      heading.append(label, state); advice.textContent = [check.hint, check.code !== "OK" ? `代码：${check.code}` : ""].filter(Boolean).join(" ");
+      row.append(heading); if (advice.textContent) row.append(advice); return row;
+    }));
+    $("#manual-flow_entry").disabled = false;
+    $("#doctor-copy").disabled = false;
+    updateDoctorSummary();
+  } catch {
+    if (number !== doctorNumber) return;
+    $("#doctor-state").textContent = "检查未完成";
+    $("#doctor-status").textContent = "请从 Flow 重新打开设置，或在插件目录运行 python main.py --doctor。";
+  } finally { if (number === doctorNumber) { $("#doctor-run").disabled = false; $("#demo-search").disabled = false; } }
+}
+$("#doctor-run").addEventListener("click", runDoctor);
+manualIds.forEach(id => $(`#manual-${id}`).addEventListener("change", updateDoctorSummary));
+$("#demo-search").addEventListener("click", async () => {
+  $("#demo-search").disabled = true; demoData = null;
+  $("#demo-result").hidden = true;
+  $("#demo-citation").hidden = true; $("#demo-citation").value = "";
+  $("#demo-open").disabled = $("#demo-copy").disabled = true;
+  for (const id of ["open_file", "paste_excerpt"]) { $(`#manual-${id}`).checked = false; $(`#manual-${id}`).disabled = true; }
+  updateDoctorSummary(); $("#demo-status").textContent = "正在检索独立人工样例…";
+  try {
+    demoData = await api("/api/demo", {});
+    $("#demo-text").textContent = demoData.text; $("#demo-source").textContent = demoData.source;
+    $("#demo-result").hidden = false; $("#demo-open").disabled = $("#demo-copy").disabled = false;
+    $("#demo-status").textContent = `“${demoData.query}”命中 1 段，行号为 3。接下来验证打开与粘贴。`;
+  } catch { $("#demo-status").textContent = "人工样例检索失败，请重新运行检查。"; }
+  finally { $("#demo-search").disabled = false; }
+});
+$("#demo-open").addEventListener("click", async () => {
+  $("#demo-open").disabled = true;
+  try {
+    await api("/api/demo-open", {});
+    $("#demo-status").textContent = "已请求打开人工样例。看到编辑器里的原文后，再勾选下方确认。";
+    if (doctorSummary) $("#manual-open_file").disabled = false;
+  } catch { $("#demo-status").textContent = "未能请求打开样例。检查文件关联或重新安装插件。"; }
+  finally { $("#demo-open").disabled = !demoData; }
+});
+$("#demo-copy").addEventListener("click", async () => {
+  if (!demoData) return;
+  try {
+    await navigator.clipboard.writeText(demoData.citation);
+    $("#demo-status").textContent = "已复制人工摘录。请粘贴到记事本，核对正文、出处和第 3 行，再勾选确认。";
+  } catch { $("#demo-status").textContent = "浏览器未允许复制。可选中下方人工摘录手动复制并粘贴核对。"; }
+  if (doctorSummary) $("#manual-paste_excerpt").disabled = false;
+  $("#demo-citation").value = demoData.citation; $("#demo-citation").hidden = false;
+});
+$("#doctor-copy").addEventListener("click", async () => {
+  updateDoctorSummary();
+  try { await navigator.clipboard.writeText($("#doctor-summary").value); toast("已复制脱敏诊断摘要。"); }
+  catch { $("#doctor-details").open = true; $("#doctor-summary").focus(); $("#doctor-summary").select(); toast("请按 Ctrl+C 复制已选中的脱敏摘要。"); }
+});
+if (requestedView === "diagnostics") { location.hash = "diagnostics"; runDoctor(); }

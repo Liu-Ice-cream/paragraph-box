@@ -133,6 +133,7 @@ class ParagraphPlugin:
                 message("段落匣 · 让资料有处可寻", "输入 sn 关键词，查找笔记、素材和工作记录。"),
                 message("按目录检索 · sn @写作 雨夜", "目录别名使用 @ 前缀；回车编辑配置。"),
                 message("配置检索目录", "打开可视化设置页，添加目录、调整检索数量。"),
+                message("运行检查与首次使用", "检查环境、验证人工样例，复制脱敏诊断摘要。", method="open_diagnostics"),
             ]
         settings = load_settings(self.base)
         alias = None
@@ -264,10 +265,10 @@ class ParagraphPlugin:
             raise FileNotFoundError(f"原文件已移走或删除：{candidate}")
         return candidate, settings
 
-    def open_config(self) -> None:
+    def open_config(self, *, diagnostics: bool = False) -> None:
         # A separate process keeps the HTTP server alive after Flow's action exits.
         subprocess.Popen(
-            [sys.executable, str(self.base / "settings_ui.py")],
+            [sys.executable, str(self.base / "settings_ui.py"), *(["--diagnostics"] if diagnostics else [])],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             close_fds=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
