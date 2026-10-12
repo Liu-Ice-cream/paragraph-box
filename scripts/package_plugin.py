@@ -28,6 +28,8 @@ PACKAGE_FILES = (
     "docs/verification-0.2.2.md", "docs/verification-0.2.3.md",
     "docs/verification-0.2.4.md", "docs/verification-0.2.5.md",
     "docs/verification-0.2.6.md",
+    "docs/verification-0.2.7.md",
+    "docs/paragraphbox-reader-navigation.jpg", "docs/paragraphbox-reader-navigation-narrow.jpg",
     "docs/paragraphbox-diagnostics.jpg",
     "docs/publication.md",
 )

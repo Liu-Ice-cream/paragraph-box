@@ -20,6 +20,12 @@ let readerController = null;
 let readerOriginal = null;
 let readerContext = null;
 let readerOpener = null;
+let previewHits = [];
+let previewQuery = "";
+let readerResults = [];
+let readerPosition = -1;
+let readerQuery = "";
+let readerActionBusy = false;
 
 function exclusions(row) { return row.querySelector(".exclude-input").value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); }
 
@@ -254,7 +260,11 @@ function citation(context) {
   const line = context.line_start === context.line_end ? context.line_start : `${context.line_start}–${context.line_end}`;
   return `${context.text}\n\n出处：${context.path}${context.heading ? ` · ${context.heading}` : ""} · 第 ${line} 行`;
 }
-function closeReader() { if ($("#reader").open) $("#reader").close(); }
+function closeReader() {
+  if (!$("#reader").open) return;
+  ++readerSession; readerController?.abort(); readerContext = null;
+  $("#reader").close();
+}
 function readerStatus(message = "", error = false) {
   const status = $("#reader-status"); status.textContent = message; status.hidden = !message;
   status.className = `reader-status${error ? " error" : ""}`; status.setAttribute("role", error ? "alert" : "status");
@@ -262,35 +272,67 @@ function readerStatus(message = "", error = false) {
 async function loadReaderContext(context, session) {
   readerController?.abort(); readerController = new AbortController();
   const signal = readerController.signal;
-  readerContext = null; $("#reader-open").disabled = true; $("#reader-copy").disabled = true;
+  readerContext = null; readerActionBusy = false; updateReaderActions();
   $("#reader-retry").hidden = true; $("#reader-search").hidden = true;
   readerStatus("正在检查资料并读取前后文…");
+  $("#reader-content").replaceChildren();
   try {
     const data = await api("/api/context", await locationRequest(context), signal);
     if (session !== readerSession || !$("#reader").open) return;
     readerContext = data.selected;
     $("#reader-content").replaceChildren(contextBlock(data.before, "前一段"), contextBlock(data.selected, "命中段落", true, context), contextBlock(data.after, "后一段"));
-    readerStatus(); $("#reader-open").disabled = false; $("#reader-copy").disabled = false;
+    readerStatus(); updateReaderActions();
   } catch (error) {
     if (error.name === "AbortError" || session !== readerSession || !$("#reader").open) return;
     readerStatus(error.message, true); $("#reader-retry").hidden = false; $("#reader-search").hidden = false;
   }
 }
-function openReader(context, opener) {
+function updateReaderActions() {
+  $("#reader-open").disabled = $("#reader-copy").disabled = !readerContext || readerActionBusy;
+}
+function selectReader(position) {
+  if (!Number.isInteger(position) || position < 0 || position >= readerResults.length || !$("#reader").open) return;
   const session = ++readerSession;
-  readerOriginal = context; readerOpener = opener;
+  readerPosition = position;
+  const context = readerResults[position]; readerOriginal = context;
+  $("#reader-position").textContent = `第 ${position + 1} / ${readerResults.length} 条`;
+  $("#reader-query").textContent = `本次检索：${readerQuery || "关键词"} · 按返回顺序浏览`;
+  $("#reader-previous").disabled = position === 0;
+  $("#reader-next").disabled = position === readerResults.length - 1;
+  if (document.activeElement?.disabled && [$("#reader-previous"), $("#reader-next")].includes(document.activeElement)) {
+    (position === 0 && readerResults.length > 1 ? $("#reader-next") : position > 0 ? $("#reader-previous") : $("#reader-close")).focus();
+  }
   $("#reader-title").textContent = context.path.split(/[\\/]/).pop();
   $("#reader-meta").textContent = `${context.alias}${context.heading ? ` · ${context.heading}` : ""} · 第 ${context.line_start === context.line_end ? context.line_start : `${context.line_start}–${context.line_end}`} 行`;
   $("#reader-path").textContent = context.path; $("#reader-location").open = false;
-  $("#reader-content").replaceChildren(contextBlock(context, "命中段落", true, context));
   $("#reader-open").textContent = serverData.config.editor === "vscode" ? "定位到命中行" : "打开原文件";
-  $("#reader").showModal(); document.body.classList.add("reader-open");
+  $("#reader .reader-body").scrollTop = 0;
   loadReaderContext(context, session);
 }
+function openReader(context, opener, position) {
+  readerOpener = opener;
+  readerResults = previewHits.map(hit => hit.ContextData);
+  if (readerResults[position] !== context) { readerResults = [context]; position = 0; }
+  readerQuery = previewQuery;
+  $("#reader").showModal(); document.body.classList.add("reader-open");
+  selectReader(position);
+}
+function moveReader(step) { selectReader(readerPosition + step); }
+$("#reader-previous").addEventListener("click", () => moveReader(-1));
+$("#reader-next").addEventListener("click", () => moveReader(1));
+$("#reader").addEventListener("keydown", event => {
+  // Plain arrows retain text selection, scrolling and native control behavior.
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing) return;
+  if (event.target.closest("input,textarea,select,[contenteditable]:not([contenteditable=false])")) return;
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault(); moveReader(event.key === "ArrowUp" ? -1 : 1);
+  }
+});
 $("#reader-close").addEventListener("click", closeReader);
 $("#reader").addEventListener("close", () => {
   if ($("#reader").open) return;
   ++readerSession; readerController?.abort(); readerContext = null; readerOriginal = null;
+  readerResults = []; readerPosition = -1; readerQuery = ""; readerActionBusy = false;
   document.body.classList.remove("reader-open");
   if (readerOpener?.isConnected) readerOpener.focus(); readerOpener = null;
 });
@@ -299,28 +341,44 @@ $("#reader").addEventListener("click", event => {
   const rect = $("#reader").getBoundingClientRect();
   if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeReader();
 });
-$("#reader-retry").addEventListener("click", () => { if (readerOriginal) loadReaderContext(readerOriginal, readerSession); });
-$("#reader-search").addEventListener("click", () => { closeReader(); search($("#preview-query").value); });
+$("#reader-retry").addEventListener("click", () => { if (readerOriginal) selectReader(readerPosition); });
+$("#reader-search").addEventListener("click", () => { const query = readerQuery; closeReader(); $("#preview-query").value = query; search(query); $("#preview-query").focus(); });
 $("#reader-open").addEventListener("click", async () => {
-  if (!readerContext) return;
-  const session = readerSession, context = readerContext; $("#reader-open").disabled = true;
+  if (!readerContext || readerActionBusy) return;
+  const session = readerSession, context = readerContext; readerActionBusy = true; updateReaderActions();
   try {
-    const result = await api("/api/open-location", await locationRequest(context));
+    const location = await locationRequest(context);
+    if (session !== readerSession || !$("#reader").open) return;
+    const result = await api("/api/open-location", location);
     if (session === readerSession && $("#reader").open) readerStatus(result.located ? `已请求在 VS Code 中打开第 ${context.line_start} 行。` : "已请求打开原文件。");
   } catch (error) {
     if (session === readerSession && $("#reader").open) {
-      readerContext = null; $("#reader-copy").disabled = true; readerStatus(error.message, true);
+      readerContext = null; $("#reader-content").replaceChildren(); readerStatus(error.message, true);
       $("#reader-retry").hidden = false; $("#reader-search").hidden = false;
     }
-  } finally { if (session === readerSession) $("#reader-open").disabled = !readerContext; }
+  } finally { if (session === readerSession) { readerActionBusy = false; updateReaderActions(); } }
 });
 $("#reader-copy").addEventListener("click", async () => {
-  if (!readerContext) return;
-  const session = readerSession;
-  try { await navigator.clipboard.writeText(citation(readerContext)); if (session === readerSession) readerStatus("摘录已复制，包含命中段落与出处。"); }
-  catch { if (session === readerSession) readerStatus("浏览器暂时无法复制，请在 Flow 的结果菜单中复制摘录。", true); }
+  if (!readerContext || readerActionBusy) return;
+  const session = readerSession, context = readerContext, signal = readerController.signal;
+  readerActionBusy = true; updateReaderActions(); readerStatus("正在核对原文，准备复制…");
+  try {
+    const verified = await api("/api/context", await locationRequest(context), signal);
+    if (session !== readerSession || !$("#reader").open || signal.aborted) return;
+    try {
+      await navigator.clipboard.writeText(citation(verified.selected));
+      if (session === readerSession && $("#reader").open) readerStatus("摘录已复制，包含当前命中段落与出处。");
+    } catch {
+      if (session === readerSession && $("#reader").open) readerStatus("浏览器暂时无法复制，请在 Flow 的结果菜单中复制摘录。", true);
+    }
+  } catch (error) {
+    if (error.name !== "AbortError" && session === readerSession && $("#reader").open) {
+      readerContext = null; $("#reader-content").replaceChildren(); readerStatus(error.message, true);
+      $("#reader-retry").hidden = false; $("#reader-search").hidden = false;
+    }
+  } finally { if (session === readerSession) { readerActionBusy = false; updateReaderActions(); } }
 });
-function hitCard(result) {
+function hitCard(result, position) {
   const context = result.ContextData;
   const card = document.createElement("article"); card.className = "preview-hit";
   const tag = document.createElement("span"); tag.className = "hit-tag"; tag.textContent = context.alias;
@@ -338,28 +396,36 @@ function hitCard(result) {
   open.addEventListener("click", async () => { open.disabled = true; try { await api("/api/open-file", {path: context.path}); toast("已请求打开原文件。"); } catch (error) { notice(error.message); } finally { open.disabled = false; } });
   const read = document.createElement("button"); read.type = "button"; read.className = "show-context";
   read.textContent = "阅读段落"; read.setAttribute("aria-haspopup", "dialog");
-  read.addEventListener("click", () => openReader(context, read));
+  read.addEventListener("click", () => openReader(context, read, position));
   const copy = document.createElement("button"); copy.type = "button"; copy.className = "copy-excerpt"; copy.textContent = "复制带出处的摘录";
   copy.addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(citation(context)); toast("摘录已复制，出处也一起保留了。"); }
-    catch { notice("浏览器暂时无法复制，请在 Flow 的结果菜单中复制摘录。"); }
+    const number = searchNumber; copy.disabled = true;
+    try {
+      const data = await api("/api/context", await locationRequest(context));
+      if (number !== searchNumber || !card.isConnected) return;
+      try { await navigator.clipboard.writeText(citation(data.selected)); toast("摘录已复制，出处也一起保留了。"); }
+      catch { notice("浏览器暂时无法复制，请在 Flow 的结果菜单中复制摘录。"); }
+    } catch (error) { if (number === searchNumber && card.isConnected) notice(error.message); }
+    finally { copy.disabled = false; }
   });
   actions.append(read, open, copy); card.append(tag, kind, text, source, location, actions); return card;
 }
 function resetPreview(message) {
   closeReader();
+  previewHits = []; previewQuery = "";
   ++searchNumber; searchController?.abort();
   stopSearchProgress?.(); stopSearchProgress = null;
   if (!indexBusy && serverData) renderIndex(serverData);
   renderSearchTiming(null);
   $("#preview-search").setAttribute("aria-busy", "false");
-  $("#preview-count").textContent = "设置页最多预览前 4 条，完整结果请在 Flow 查看。";
+  $("#preview-count").textContent = "卡片预览前 4 条；阅读面板可连续浏览本次返回的全部结果。";
   const placeholder = document.createElement("div"); placeholder.className = "preview-message"; placeholder.textContent = message;
   $("#preview-results").replaceChildren(placeholder);
 }
 async function search(query) {
   if (indexBusy) return;
   closeReader();
+  previewHits = []; previewQuery = "";
   if (!query.trim()) { resetPreview("输入关键词，找回你记得的那一段。"); $("#preview-query").focus(); return; }
   const number = ++searchNumber;
   stopSearchProgress?.();
@@ -377,8 +443,9 @@ async function search(query) {
     if (number !== searchNumber) return;
     renderSearchTiming(data.search_status);
     const hits = data.results.filter(result => result.ContextData);
+    previewHits = hits; previewQuery = query.trim().replace(/^sn\s+/, "");
     resultsElement.replaceChildren(...hits.slice(0, 4).map(hitCard));
-    $("#preview-count").textContent = hits.length > 4 ? `本次返回 ${hits.length} 条段落，预览前 4 条；完整结果请在 Flow 查看。` : `展示本次返回的全部 ${hits.length} 条段落（最多预览 4 条）。`;
+    $("#preview-count").textContent = hits.length > 4 ? `本次返回 ${hits.length} 条段落，卡片预览前 4 条；打开阅读面板可连续浏览全部返回结果。` : `展示本次返回的全部 ${hits.length} 条段落（最多预览 4 条）。`;
     for (const result of data.results.filter(result => !result.ContextData)) {
       const message = document.createElement("div"); message.className = "preview-message"; message.textContent = `${result.Title}：${result.SubTitle}`; resultsElement.append(message);
     }
@@ -389,6 +456,7 @@ async function search(query) {
     serverData = updated; renderIndex(updated);
   } catch (error) {
     if (number !== searchNumber || error.name === "AbortError") return;
+    closeReader(); previewHits = []; previewQuery = "";
     resultsElement.replaceChildren(); const message = document.createElement("div"); message.className = "preview-message";
     message.textContent = error.message; resultsElement.append(message); $("#preview-count").textContent = "本次检索未完成，可重试或从 Flow 重新打开设置。";
     renderIndex(serverData);
