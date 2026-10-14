@@ -85,6 +85,65 @@ class SettingsServerTests(unittest.TestCase):
         self.assertEqual(self.request('/api/demo', {})[1]['source'], '人工样例.txt · 第 3 行')
         self.assertFalse((self.base / '.cache/index.sqlite3').exists())
 
+    def test_search_summary_counts_actual_matches_and_scoped_paragraphs(self):
+        (self.base / 'notes/记录.md').write_text('\n\n'.join(f'雨夜 人工段落 {n}' for n in range(7)), encoding='utf-8')
+        (self.base / 'work').mkdir()
+        (self.base / 'work/人工.txt').write_text('另一个目录的工作资料。', encoding='utf-8')
+        self.config['roots'].append({'alias':'Straße','path':'work'})
+        self.config['max_results'] = 2
+        self.request('/api/config',self.config)
+        summary = self.request('/api/search',{'query':'@写作 雨夜'})[1]['search_status']['summary']
+        self.assertEqual((summary['matched'],summary['returned'],summary['limit']),(7,2,2))
+        self.assertEqual((summary['scope_files'],summary['scope_paragraphs']),(1,7))
+        self.assertIsNone(summary['empty_reason'])
+        summary = self.request('/api/search',{'query':'＠STRASSE 雨夜'})[1]['search_status']['summary']
+        self.assertEqual(summary['scope'],'Straße')
+        self.assertEqual(summary['scope_paragraphs'],1)
+        self.assertEqual(summary['empty_reason'],'no_match')
+
+    def test_search_summary_empty_scope_is_not_counted_as_all_directories(self):
+        (self.base / 'empty').mkdir()
+        self.config['roots'].append({'alias':'空目录','path':'empty'})
+        self.request('/api/config',self.config)
+        summary = self.request('/api/search',{'query':'@空目录 雨夜'})[1]['search_status']['summary']
+        self.assertEqual(summary['empty_reason'],'no_paragraphs')
+        self.assertEqual((summary['scope_files'],summary['scope_paragraphs']),(0,0))
+        self.assertEqual(summary['unavailable_roots'],0)
+        self.assertGreater(self.request('/api/config')[1]['stats']['paragraphs'],0)
+
+    def test_search_summary_unknown_or_keywordless_alias_does_not_build_index(self):
+        summary = self.request('/api/search',{'query':'@未配置 雨夜'})[1]['search_status']['summary']
+        self.assertEqual(summary['empty_reason'],'unknown_alias')
+        self.assertEqual(summary['requested_alias'],'未配置')
+        summary = self.request('/api/search',{'query':'@写作'})[1]['search_status']['summary']
+        self.assertEqual(summary,{'empty_reason':'keywords_required','scope':'写作','keywords':''})
+        self.assertFalse((self.base / '.cache/index.sqlite3').exists())
+
+    def test_search_summary_unavailable_scope_and_global_warnings_remain_distinct(self):
+        self.config['roots'].append({'alias':'缺失','path':'missing'})
+        (self.base / 'config.json').write_text(json.dumps(self.config),encoding='utf-8')
+        summary = self.request('/api/search',{'query':'@写作 无匹配'})[1]['search_status']['summary']
+        self.assertEqual(summary['empty_reason'],'no_match')
+        self.assertEqual(summary['unavailable_roots'],0)
+        self.assertEqual(summary['index_issue_count'],1)
+        summary = self.request('/api/search',{'query':'@缺失 雨夜'})[1]['search_status']['summary']
+        self.assertEqual(summary['empty_reason'],'directories_unavailable')
+        self.assertEqual(summary['unavailable_roots'],1)
+
+    def test_search_summary_exclusions_and_skipped_files_are_facts_not_no_match(self):
+        (self.base / 'notes/记录.md').unlink()
+        (self.base / 'notes/备份').mkdir()
+        (self.base / 'notes/备份/排除.txt').write_text('雨夜',encoding='utf-8')
+        (self.base / 'notes/过大.txt').write_text('雨夜' * 1000,encoding='utf-8')
+        self.config['max_file_bytes'] = 1024
+        self.config['roots'][0]['exclude_dirs'] = ['备份']
+        self.assertEqual(self.request('/api/config',self.config)[0],200)
+        summary = self.request('/api/search',{'query':'雨夜'})[1]['search_status']['summary']
+        self.assertEqual(summary['empty_reason'],'no_paragraphs')
+        self.assertTrue(summary['has_exclusions'])
+        self.assertEqual(summary['skipped_total'],1)
+        self.assertEqual(summary['index_issue_count'],1)
+
     def test_diagnostic_actions_require_auth_and_refuse_arbitrary_paths(self):
         from paragraph_search.diagnostics import DEMO_NAME, DEMO_TEXT
         sample = self.base / 'samples/diagnostics' / DEMO_NAME

@@ -129,6 +129,8 @@ class ParagraphPlugin:
             raise ValueError("query 参数必须是字符串。")
         query = unicodedata.normalize("NFKC", query).strip()
         if not query:
+            if metrics is not None:
+                metrics["summary"] = {"empty_reason": "keywords_required", "scope": None, "keywords": ""}
             return [
                 message("段落匣 · 让资料有处可寻", "输入 sn 关键词，查找笔记、素材和工作记录。"),
                 message("按目录检索 · sn @写作 雨夜", "目录别名使用 @ 前缀；回车编辑配置。"),
@@ -144,9 +146,14 @@ class ParagraphPlugin:
             alias = next((root.alias for root in settings.roots if normalize(root.alias) == normalize(requested)), None)
             if alias is None:
                 available = "、".join(root.alias for root in settings.roots)
+                if metrics is not None:
+                    metrics["summary"] = {"empty_reason": "unknown_alias", "scope": None, "keywords": query,
+                                          "requested_alias": requested}
                 return [message(f"未知目录别名：{requested}", f"可用别名：{available}；回车编辑配置。")]
             query = query.strip()
         if not query:
+            if metrics is not None:
+                metrics["summary"] = {"empty_reason": "keywords_required", "scope": alias, "keywords": ""}
             return [message(f"请输入关键词 · @{alias}", "例如 sn @写作 雨夜；回车编辑配置。")]
         index = ParagraphIndex(settings.cache_path, settings.roots, settings.max_file_bytes)
         prepared = time.perf_counter()
@@ -156,6 +163,20 @@ class ParagraphPlugin:
             synced = time.perf_counter()
             hits = index.search(query, alias=alias, limit=settings.max_results, metrics=search_metrics)
             searched = time.perf_counter()
+            if metrics is not None:
+                scoped_roots = [root for root in settings.roots if alias is None or root.alias == alias]
+                scope_stats = index.scope_stats(alias) if alias is not None else {"files": stats["files"], "paragraphs": stats["paragraphs"]}
+                root_failures = {issue["path"] for issue in stats.get("issues", [])
+                                 if issue["reason"] in {"root_missing", "not_directory", "unreadable", "scan_failed"}}
+                unavailable = sum(not root.path.is_dir() or str(root.path.resolve()) in root_failures for root in scoped_roots)
+                reason = ("directories_unavailable" if unavailable == len(scoped_roots) else
+                          "no_paragraphs" if scope_stats["paragraphs"] == 0 else "no_match") if not hits else None
+                metrics["summary"] = {"scope": alias, "keywords": query, "empty_reason": reason,
+                                      "matched": search_metrics["matched"], "returned": len(hits), "limit": settings.max_results,
+                                      "scope_files": scope_stats["files"], "scope_paragraphs": scope_stats["paragraphs"],
+                                      "unavailable_roots": unavailable, "has_exclusions": any(root.exclude_dirs for root in scoped_roots),
+                                      "skipped_total": stats.get("skipped", 0), "index_issue_count": stats.get("issue_count", 0)}
+            summarized = time.perf_counter()
         finally:
             index.close()
         closed = time.perf_counter()
@@ -171,7 +192,8 @@ class ParagraphPlugin:
             metrics.update(prepare_ms=round((prepared - started) * 1000, 2),
                            index_ms=round((synced - prepared) * 1000, 2),
                            index_reused=bool(stats.get("cache_reused")), search=search_metrics,
-                           close_ms=round((closed - searched) * 1000, 2),
+                           scope_ms=round((summarized - searched) * 1000, 2),
+                           close_ms=round((closed - summarized) * 1000, 2),
                            format_ms=round((finished - formatting) * 1000, 2),
                            duration_ms=round((finished - started) * 1000, 2))
         return results

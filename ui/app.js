@@ -27,6 +27,50 @@ let readerPosition = -1;
 let readerQuery = "";
 let readerActionBusy = false;
 
+function queryParts(value) {
+  const query = value.trim().replace(/^sn(?:\s+|$)/, "").normalize("NFKC");
+  const match = /^@([^\s]*)(?:\s+([\s\S]*))?$/.exec(query);
+  return match ? {alias: match[1], keywords: (match[2] || "").trim()} : {alias: null, keywords: query};
+}
+function scopeQuery(alias, keywords) { return alias === null ? keywords : `@${alias}${keywords ? ` ${keywords}` : ""}`; }
+function syncScopes(canonical) {
+  const parts = queryParts($("#preview-query").value);
+  const selected = canonical === undefined ? parts.alias : canonical;
+  for (const button of $("#search-scopes").children) {
+    const alias = button.dataset.alias || null;
+    const pressed = alias === null ? selected === null : selected !== null && alias.normalize("NFKC").toLowerCase() === selected.normalize("NFKC").toLowerCase();
+    button.setAttribute("aria-pressed", String(pressed));
+    button.classList.toggle("active", pressed); button.disabled = busy || indexBusy || !serverData;
+  }
+}
+function samePreviewQuery(query) {
+  const current = queryParts($("#preview-query").value), requested = queryParts(query);
+  return current.alias === requested.alias && current.keywords === requested.keywords;
+}
+function renderScopes(data, canonical) {
+  const make = alias => {
+    const button = document.createElement("button"); button.type = "button"; button.className = "scope-chip";
+    button.dataset.alias = alias || ""; button.textContent = alias === null ? "全部目录" : alias;
+    button.setAttribute("aria-label", alias === null ? "搜索全部目录" : `检索目录：${alias}`);
+    if (alias !== null && !data.root_states.find(state => state.alias === alias)?.exists) {
+      button.classList.add("unavailable"); button.title = "目录当前不可用，检索后可查看修复建议。";
+    }
+    button.addEventListener("click", () => chooseScope(alias)); return button;
+  };
+  $("#search-scopes").replaceChildren(make(null), ...data.config.roots.map(root => make(root.alias)));
+  syncScopes(canonical);
+  $("#search-scope-help").textContent = data.index_status?.report ? "快捷筛选使用已保存目录；多个关键词需全部命中同一段落或章节。" : "首次搜索会自动建立索引。快捷筛选使用已保存目录。";
+}
+function chooseScope(alias) {
+  if (busy || indexBusy || !serverData) return;
+  const {keywords} = queryParts($("#preview-query").value);
+  $("#preview-query").value = scopeQuery(alias, keywords); syncScopes();
+  if (keywords) search($("#preview-query").value);
+  else resetPreview("已选择搜索范围，输入关键词即可检索。");
+  $("#preview-query").focus();
+}
+$("#preview-query").addEventListener("input", () => syncScopes());
+
 function exclusions(row) { return row.querySelector(".exclude-input").value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); }
 
 async function api(path, data, signal, operation) {
@@ -106,6 +150,7 @@ function setSaving(value) {
   busy = value;
   document.querySelectorAll("#roots input, #roots textarea, #roots button, #max-results, #max-size, #editor, #add-root").forEach(field => { field.disabled = value; });
   updateDirty();
+  syncScopes();
 }
 function rootRow(root, exists = true) {
   const row = $("#root-template").content.firstElementChild.cloneNode(true);
@@ -154,6 +199,7 @@ function render(data) {
   $("#file-total").textContent = String(data.stats.files); $("#paragraph-total").textContent = String(data.stats.paragraphs);
   $("#version").textContent = `ParagraphBox · v${data.version}`;
   $("#summary-note").textContent = data.sample_mode ? "当前使用人工样例，可随时添加自己的目录。" : "下一次搜索将自动更新资料索引。";
+  renderScopes(data);
   renderIndex(data); showIssues(); updateDirty();
 }
 
@@ -191,7 +237,7 @@ $("#rebuild-index").addEventListener("click", async () => {
   const stopProgress = watchIndex(operation, () => indexBusy);
   try { const data = await api("/api/rebuild-index", {}, undefined, operation); stopProgress(); render(data); resetPreview("索引已更新，输入关键词重新试搜。"); toast(`索引已重新建立，更新 ${data.index_status.report.updated} 个文件。`); }
   catch (error) { renderIndex(serverData); resetPreview("重建未完成，可重试或重新检索。"); notice(`重建未完成：${error.message}`); }
-  finally { stopProgress(); indexBusy = false; setSaving(false); $("#rebuild-index").textContent = "重新建立索引"; document.querySelectorAll("#preview-form input, #preview-form button, [data-query]").forEach(field => { field.disabled = false; }); }
+  finally { stopProgress(); indexBusy = false; setSaving(false); $("#rebuild-index").textContent = "重新建立索引"; document.querySelectorAll("#preview-form input, #preview-form button, [data-query]").forEach(field => { field.disabled = false; }); syncScopes(); }
 });
 $("#add-root").addEventListener("click", () => {
   const row = rootRow({alias: "", path: ""}, false); row.dataset.state = "pending"; rowState(row, "pending");
@@ -225,7 +271,7 @@ function renderSearchTiming(status) {
   if (!status?.search) return;
   $("#search-timing-summary").textContent = `本次检索 ${status.duration_ms.toFixed(1)} ms · ${status.index_reused ? "复用近期索引" : "已检查文件变化"}`;
   const stages = [["准备资料", status.prepare_ms], ["索引检查", status.index_ms], ["资料匹配", status.search.query_ms],
-                  ["结果排序", status.search.ranking_ms], ["结果整理", status.search.result_ms + status.format_ms], ["完成处理", status.close_ms]];
+                  ["结果排序", status.search.ranking_ms], ["范围统计", status.scope_ms || 0], ["结果整理", status.search.result_ms + status.format_ms], ["完成处理", status.close_ms]];
   $("#search-timing-list").replaceChildren(...stages.map(([label, duration]) => {
     const item = document.createElement("div"), name = document.createElement("dt"), value = document.createElement("dd");
     name.textContent = label; value.textContent = `${duration.toFixed(1)} ms`; item.append(name, value); return item;
@@ -410,6 +456,49 @@ function hitCard(result, position) {
   });
   actions.append(read, open, copy); card.append(tag, kind, text, source, location, actions); return card;
 }
+function renderSearchCount(summary, hits) {
+  const count = $("#preview-count"), limit = $("#search-limit-note");
+  limit.hidden = true;
+  if (!Number.isInteger(summary?.matched)) {
+    count.textContent = summary ? "先确认搜索范围与关键词，再开始检索。" : `本次返回 ${hits.length} 条段落，卡片预览前 4 条。`;
+    return;
+  }
+  count.textContent = `${summary.scope === null ? "全部目录" : `@${summary.scope}`} · 匹配 ${summary.matched} 条，返回 ${summary.returned} 条。${hits.length > 4 ? "卡片预览前 4 条，阅读面板可浏览全部返回结果。" : ""}`;
+  limit.hidden = summary.matched <= summary.returned;
+  $("#search-limit-text").textContent = `当前返回上限为 ${summary.limit} 条。选择更具体的目录或补充关键词，可缩小匹配范围。`;
+}
+function emptySearch(summary) {
+  const section = document.createElement("section"); section.className = "search-empty";
+  const title = document.createElement("h3"), text = document.createElement("p");
+  const reason = summary.empty_reason;
+  title.textContent = {unknown_alias: "这个目录别名尚未配置", keywords_required: "输入关键词开始检索", directories_unavailable: "当前范围的目录不可用", no_paragraphs: "当前范围还没有可检索段落", no_match: "没有找到匹配段落"}[reason] || "没有找到匹配段落";
+  text.textContent = {unknown_alias: `未识别 @${summary.requested_alias}。请点击上方已保存的目录，或检查目录别名。`,
+    keywords_required: "选择范围后，再输入你记得的一个词。首次搜索会自动建立索引。",
+    directories_unavailable: "请检查已保存目录是否被移动、删除或无法访问，修复后再重试。",
+    no_paragraphs: `当前范围已索引 ${summary.scope_files} 个文件、0 个段落。确认目录中有 Markdown / TXT 正文${summary.has_exclusions ? "，并检查排除规则" : ""}。`,
+    no_match: `当前范围已有 ${summary.scope_paragraphs} 个可检索段落。${summary.keywords.split(/\s+/).length > 1 ? "多个词需全部命中同一段落或章节，可先减少关键词。" : "试试更短的关键词，或扩大搜索范围。"}`}[reason] || "调整关键词后再试一次。";
+  const actions = document.createElement("div"); actions.className = "empty-actions";
+  const button = (label, handler) => { const item = document.createElement("button"); item.type = "button"; item.className = "button secondary"; item.textContent = label; item.addEventListener("click", handler); actions.append(item); };
+  const link = (label, target) => { const item = document.createElement("a"); item.className = "button secondary"; item.textContent = label; item.href = target; actions.append(item); };
+  if (reason === "keywords_required") button("输入关键词", () => $("#preview-query").focus());
+  else if (reason === "no_match") {
+    button("调整关键词", () => $("#preview-query").focus());
+    if (summary.keywords.split(/\s+/).length > 1) button("只搜第一个词", () => { $("#preview-query").value = scopeQuery(summary.scope, summary.keywords.split(/\s+/)[0]); search($("#preview-query").value); });
+    if (summary.scope !== null) button("搜索全部目录", () => { $("#preview-query").value = summary.keywords; syncScopes(); search(summary.keywords); });
+  } else link("检查资料目录", "#directories");
+  if (reason === "directories_unavailable" || reason === "no_paragraphs") button("重试检索", () => search($("#preview-query").value));
+  section.append(title, text);
+  if (summary.unavailable_roots && reason !== "directories_unavailable") {
+    const warning = document.createElement("p"); warning.textContent = `当前范围有 ${summary.unavailable_roots} 个目录不可用，可能影响结果。`; section.append(warning); link("检查资料目录", "#directories");
+  }
+  if (summary.index_issue_count) {
+    const warning = document.createElement("p"); warning.className = "empty-warning";
+    warning.textContent = `所有目录的本次索引有 ${summary.index_issue_count} 项问题，跳过 ${summary.skipped_total} 个文件；可能与当前范围不同。`;
+    section.append(warning);
+    button("查看索引原因", () => { $("#index-issues").hidden = false; $("#index-issues").open = true; $("#index-issues").scrollIntoView({block:"center"}); $("#index-issues summary").focus(); });
+  }
+  section.append(actions); return section;
+}
 function resetPreview(message) {
   closeReader();
   previewHits = []; previewQuery = "";
@@ -417,6 +506,7 @@ function resetPreview(message) {
   stopSearchProgress?.(); stopSearchProgress = null;
   if (!indexBusy && serverData) renderIndex(serverData);
   renderSearchTiming(null);
+  $("#search-limit-note").hidden = true;
   $("#preview-search").setAttribute("aria-busy", "false");
   $("#preview-count").textContent = "卡片预览前 4 条；阅读面板可连续浏览本次返回的全部结果。";
   const placeholder = document.createElement("div"); placeholder.className = "preview-message"; placeholder.textContent = message;
@@ -426,6 +516,7 @@ async function search(query) {
   if (indexBusy) return;
   closeReader();
   previewHits = []; previewQuery = "";
+  syncScopes(); $("#search-limit-note").hidden = true;
   if (!query.trim()) { resetPreview("输入关键词，找回你记得的那一段。"); $("#preview-query").focus(); return; }
   const number = ++searchNumber;
   stopSearchProgress?.();
@@ -445,25 +536,34 @@ async function search(query) {
     const hits = data.results.filter(result => result.ContextData);
     previewHits = hits; previewQuery = query.trim().replace(/^sn\s+/, "");
     resultsElement.replaceChildren(...hits.slice(0, 4).map(hitCard));
-    $("#preview-count").textContent = hits.length > 4 ? `本次返回 ${hits.length} 条段落，卡片预览前 4 条；打开阅读面板可连续浏览全部返回结果。` : `展示本次返回的全部 ${hits.length} 条段落（最多预览 4 条）。`;
-    for (const result of data.results.filter(result => !result.ContextData)) {
+    const summary = data.search_status?.summary;
+    renderSearchCount(summary, hits);
+    if (summary && samePreviewQuery(query)) syncScopes(summary.empty_reason === "unknown_alias" ? undefined : summary.scope);
+    if (!hits.length && summary) resultsElement.append(emptySearch(summary));
+    for (const result of data.results.filter(result => !result.ContextData && (hits.length || !summary))) {
       const message = document.createElement("div"); message.className = "preview-message"; message.textContent = `${result.Title}：${result.SubTitle}`; resultsElement.append(message);
     }
     if (isDirty()) toast("试搜使用的是已保存目录；保存后再试搜新目录。");
     const updated = await api("/api/config", undefined, signal);
     if (number !== searchNumber) return;
     $("#file-total").textContent = String(updated.stats.files); $("#paragraph-total").textContent = String(updated.stats.paragraphs);
-    serverData = updated; renderIndex(updated);
+    serverData = updated; renderIndex(updated); renderScopes(updated, summary && samePreviewQuery(query) && summary.empty_reason !== "unknown_alias" ? summary.scope : undefined);
+    if (!hits.length && summary?.index_issue_count) $("#index-issues").hidden = false;
   } catch (error) {
     if (number !== searchNumber || error.name === "AbortError") return;
     closeReader(); previewHits = []; previewQuery = "";
+    $("#search-limit-note").hidden = true; renderSearchTiming(null);
     resultsElement.replaceChildren(); const message = document.createElement("div"); message.className = "preview-message";
     message.textContent = error.message; resultsElement.append(message); $("#preview-count").textContent = "本次检索未完成，可重试或从 Flow 重新打开设置。";
     renderIndex(serverData);
   } finally { stopProgress(); if (number === searchNumber) { stopSearchProgress = null; $("#preview-search").setAttribute("aria-busy", "false"); } }
 }
+function useExample(keywords) {
+  $("#preview-query").value = scopeQuery(queryParts($("#preview-query").value).alias, keywords);
+  search($("#preview-query").value);
+}
 $("#preview-form").addEventListener("submit", event => { event.preventDefault(); search($("#preview-query").value); });
-document.querySelectorAll("[data-query]").forEach(button => button.addEventListener("click", () => { $("#preview-query").value = button.dataset.query; search(button.dataset.query); }));
+document.querySelectorAll("[data-query]").forEach(button => button.addEventListener("click", () => useExample(button.dataset.query)));
 $("#open-config-file").addEventListener("click", async () => { try { await api("/api/open-config-file", {}); } catch (error) { notice(error.message); } });
 function updateNavigation() { const hash = location.hash || "#directories"; document.querySelectorAll(".nav-item").forEach(link => link.classList.toggle("active", link.getAttribute("href") === hash)); }
 window.addEventListener("hashchange", updateNavigation); updateNavigation();

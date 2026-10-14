@@ -15,7 +15,7 @@ function harness() {
   class Element {
     constructor(name) {
       this.name = name; this.listeners = {}; this.children = [];
-      this.textContent = ''; this.value = ''; this.disabled = false;
+      this.textContent = ''; this.value = ''; this.disabled = false; this.dataset = {}; this.attributes = {};
       this.hidden = false; this.open = false; this.isConnected = true;
       this.classList = {add(){}, remove(){}, toggle(){}};
     }
@@ -23,7 +23,9 @@ function harness() {
     emit(type, event = {}) { return Promise.all((this.listeners[type] || []).map(handler => handler({target:this, ...event}))); }
     append(...nodes) { this.children.push(...nodes); }
     replaceChildren(...nodes) { this.children = nodes; }
-    setAttribute() {}
+    setAttribute(name,value) { this.attributes[name]=value; }
+    getAttribute(name) { return this.attributes[name]; }
+    scrollIntoView() {}
     focus() { document.activeElement = this; }
     closest() { return null; }
     showModal() { this.open = true; get('#reader-close').focus(); }
@@ -36,6 +38,7 @@ function harness() {
     path:`samples/记录${index + 1}.md`, alias:'样例', heading:`章节 ${index + 1}`,
     text:`关键词 人工段落 ${index + 1}`, line_start:3 + index, line_end:3 + index, text_matches:[]
   }}));
+  let configs=0;
   const sandbox = {document, window:{addEventListener(){}}, location:{hash:'',search:'',pathname:'/'},
     sessionStorage:{getItem:()=>'',setItem(){}}, URLSearchParams, TextEncoder, AbortController,
     crypto:webcrypto, structuredClone, setTimeout, clearTimeout, fixtureHits,
@@ -43,8 +46,8 @@ function harness() {
     fetch:(route, options) => {
       // The initial config request intentionally stays pending; tests supply an
       // already-rendered search snapshot, independent of config form controls.
-      if (route === '/api/config') return new Promise(()=>{});
-      return new Promise(resolve => requests.push({route, body:JSON.parse(options.body), signal:options.signal,
+      if (route === '/api/config' && ++configs===1) return new Promise(()=>{});
+      return new Promise(resolve => requests.push({route, body:options.body ? JSON.parse(options.body) : undefined, signal:options.signal,
         succeed:data=>resolve({ok:true,json:async()=>data}), fail:message=>resolve({ok:false,json:async()=>({error:message})})}));
     }
   };
@@ -64,6 +67,121 @@ function previewCopy(h) {
   const copy = card.children.at(-1).children.find(child=>child.className==='copy-excerpt');
   return {card, copy};
 }
+
+function searchFixture(h) {
+  h.context.searchFixtureData = {config:{editor:'default',roots:[{alias:'写作'},{alias:'工作'},{alias:'Straße'}]},
+    root_states:[{alias:'写作',exists:true},{alias:'工作',exists:false},{alias:'Straße',exists:true}],stats:{files:3,paragraphs:9},index_status:{}};
+  vm.runInContext('serverData=searchFixtureData; renderScopes(serverData)',h.context);
+  return h.context.searchFixtureData;
+}
+function latestSearch(h) { return h.requests.filter(request=>request.route==='/api/search').at(-1); }
+async function finishSearch(h, request, summary, results=[]) {
+  const oldConfigs=h.requests.filter(request=>request.route==='/api/config').length;
+  request.succeed({results,search_status:{summary,prepare_ms:0,index_ms:0,scope_ms:0,close_ms:0,format_ms:0,duration_ms:0,
+    search:summary.matched===undefined ? undefined : {matched:summary.matched,returned:summary.returned,query_ms:0,ranking_ms:0,result_ms:0}}});
+  await until(()=>h.requests.filter(request=>request.route==='/api/config').length>oldConfigs);
+  h.requests.filter(request=>request.route==='/api/config').at(-1).succeed(h.context.searchFixtureData);
+  await new Promise(resolve=>setImmediate(resolve));
+}
+const noMatch = {empty_reason:'no_match',scope:'写作',keywords:'雨夜 车站',matched:0,returned:0,limit:2,scope_files:1,scope_paragraphs:7,unavailable_roots:0,has_exclusions:false,skipped_total:0,index_issue_count:0};
+
+test('example queries keep the chosen scope',async()=>{
+  const h=harness(); searchFixture(h); h.get('#preview-query').value='@写作';
+  vm.runInContext('useExample("雨夜")',h.context); await until(()=>latestSearch(h));
+  assert.equal(latestSearch(h).body.query,'@写作 雨夜');
+  await finishSearch(h,latestSearch(h),{...noMatch,keywords:'雨夜'});
+});
+
+test('a failed metadata refresh clears result cap hints and stale reading snapshots',async()=>{
+  const h=harness(); searchFixture(h); h.get('#preview-query').value='雨夜';
+  vm.runInContext('search("雨夜")',h.context); await until(()=>latestSearch(h));
+  latestSearch(h).succeed({results:h.fixtureHits,search_status:{summary:{...noMatch,matched:9,returned:6}}});
+  await until(()=>h.requests.some(request=>request.route==='/api/config'));
+  h.requests.find(request=>request.route==='/api/config').fail('无法刷新配置');
+  await until(()=>h.get('#preview-count').textContent.includes('未完成'));
+  assert.equal(h.get('#search-limit-note').hidden,true);
+  assert.equal(vm.runInContext('previewHits.length',h.context),0);
+  assert.equal(h.get('#search-timings').hidden,true);
+});
+
+test('scope chips use saved roots and replace an existing selector without dropping keywords', async()=>{
+  const h=harness(); searchFixture(h);
+  assert.deepEqual(h.get('#search-scopes').children.map(button=>button.textContent),['全部目录','写作','工作','Straße']);
+  h.get('#preview-query').value='sn ＠写作 雨夜 车站';
+  await h.get('#search-scopes').children[2].emit('click'); await until(()=>latestSearch(h));
+  assert.equal(h.get('#preview-query').value,'@工作 雨夜 车站');
+  assert.equal(latestSearch(h).body.query,'@工作 雨夜 车站');
+  assert.equal(h.get('#search-scopes').children[2].getAttribute('aria-pressed'),'true');
+  await finishSearch(h,latestSearch(h),{...noMatch,scope:'工作'});
+  await h.get('#search-scopes').children[0].emit('click'); await until(()=>h.requests.filter(request=>request.route==='/api/search').length===2);
+  assert.equal(latestSearch(h).body.query,'雨夜 车站');
+  await finishSearch(h,latestSearch(h),{...noMatch,scope:null});
+});
+
+test('choosing a scope without keywords does not request indexing or search', async()=>{
+  const h=harness(); searchFixture(h); h.get('#preview-query').value='';
+  await h.get('#search-scopes').children[1].emit('click');
+  assert.equal(h.get('#preview-query').value,'@写作'); assert.equal(h.requests.length,0);
+  assert.equal(h.document.activeElement,h.get('#preview-query'));
+});
+
+test('match count and result cap are distinct and exact-limit matches are not truncated',()=>{
+  const h=harness(); h.context.countSummary={...noMatch,matched:8,returned:2};
+  vm.runInContext('renderSearchCount(countSummary,fixtureHits.slice(0,2))',h.context);
+  assert.match(h.get('#preview-count').textContent,/匹配 8 条，返回 2 条/);
+  assert.equal(h.get('#search-limit-note').hidden,false);
+  h.context.countSummary.matched=2;
+  vm.runInContext('renderSearchCount(countSummary,fixtureHits.slice(0,2))',h.context);
+  assert.equal(h.get('#search-limit-note').hidden,true);
+});
+
+test('unknown scope is not highlighted as all and backend canonical aliases survive config refresh', async()=>{
+  const h=harness(); searchFixture(h); h.get('#preview-query').value='@未配置 雨夜';
+  vm.runInContext('syncScopes(); search("@未配置 雨夜")',h.context); await until(()=>latestSearch(h));
+  assert.ok(h.get('#search-scopes').children.every(button=>button.getAttribute('aria-pressed')==='false'));
+  await finishSearch(h,latestSearch(h),{empty_reason:'unknown_alias',scope:null,keywords:'雨夜',requested_alias:'未配置'});
+  assert.equal(h.get('#preview-results').children[0].children[0].textContent,'这个目录别名尚未配置');
+  h.get('#preview-query').value='＠STRASSE 雨夜';
+  vm.runInContext('search("＠STRASSE 雨夜")',h.context); await until(()=>h.requests.filter(request=>request.route==='/api/search').length===2);
+  await finishSearch(h,latestSearch(h),{...noMatch,scope:'Straße',keywords:'雨夜'});
+  assert.equal(h.get('#search-scopes').children[3].getAttribute('aria-pressed'),'true');
+});
+
+test('empty guidance distinguishes unavailable directories, empty content and global skipped files',()=>{
+  const h=harness(); searchFixture(h);
+  for (const [reason,title] of [['directories_unavailable','当前范围的目录不可用'],['no_paragraphs','当前范围还没有可检索段落'],['no_match','没有找到匹配段落']]) {
+    h.context.emptySummary={...noMatch,empty_reason:reason,has_exclusions:true,index_issue_count:2,skipped_total:1};
+    const section=vm.runInContext('emptySearch(emptySummary)',h.context);
+    assert.equal(section.children[0].textContent,title);
+    assert.match(section.children.find(child=>child.className==='empty-warning').textContent,/所有目录.*跳过 1 个文件/);
+    assert.ok(section.children.at(-1).children.some(button=>button.textContent==='查看索引原因'));
+    if (reason==='no_paragraphs') assert.match(section.children[1].textContent,/检查排除规则/);
+  }
+});
+
+test('reducing keywords keeps scope and expanding scope keeps all keywords',async()=>{
+  const h=harness(); searchFixture(h); h.context.emptySummary={...noMatch};
+  const section=vm.runInContext('emptySearch(emptySummary)',h.context);
+  await section.children.at(-1).children.find(button=>button.textContent==='只搜第一个词').emit('click');
+  await until(()=>latestSearch(h)); assert.equal(latestSearch(h).body.query,'@写作 雨夜');
+  await finishSearch(h,latestSearch(h),{...noMatch,keywords:'雨夜'});
+  await section.children.at(-1).children.find(button=>button.textContent==='搜索全部目录').emit('click');
+  await until(()=>h.requests.filter(request=>request.route==='/api/search').length===2);
+  assert.equal(latestSearch(h).body.query,'雨夜 车站');
+  await finishSearch(h,latestSearch(h),{...noMatch,scope:null});
+});
+
+test('late results from the old scope cannot overwrite new counts or empty guidance',async()=>{
+  const h=harness(); searchFixture(h); h.get('#preview-query').value='@写作 雨夜';
+  vm.runInContext('search("@写作 雨夜")',h.context); await until(()=>latestSearch(h)); const old=latestSearch(h);
+  await h.get('#search-scopes').children[2].emit('click'); await until(()=>h.requests.filter(request=>request.route==='/api/search').length===2);
+  await finishSearch(h,latestSearch(h),{...noMatch,scope:'工作',keywords:'雨夜'});
+  old.succeed({results:h.fixtureHits,search_status:{summary:{...noMatch,matched:80,returned:6}}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(h.get('#preview-count').textContent,/@工作 · 匹配 0 条/);
+  assert.equal(h.get('#preview-results').children[0].className,'search-empty');
+  assert.equal(h.get('#search-limit-note').hidden,true);
+});
 
 test('preview card copy verifies the source and refuses a stale paragraph', async()=>{
   const h=harness(), {copy}=previewCopy(h);

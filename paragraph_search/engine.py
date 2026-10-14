@@ -533,6 +533,14 @@ class ParagraphIndex:
         notify("done")
         return report
 
+    def scope_stats(self, alias: str | None = None) -> dict[str, int]:
+        where, parameters = (" WHERE f.alias_key = ?", (_normalize(alias),)) if alias is not None else ("", ())
+        row = self._connection.execute(
+            "SELECT COUNT(DISTINCT f.id), COUNT(p.file_id) FROM files f "
+            "LEFT JOIN paragraphs p ON p.file_id = f.id" + where, parameters
+        ).fetchone()
+        return {"files": row[0], "paragraphs": row[1]}
+
     def search(self, query: str, alias: str | None = None, limit: int = 30,
                *, metrics: dict | None = None) -> list[SearchHit]:
         started = time.perf_counter()

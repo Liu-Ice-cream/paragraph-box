@@ -33,7 +33,7 @@ class PackagePrivacyTests(unittest.TestCase):
             self.assertEqual(set(archive.namelist()), set(PACKAGE_FILES))
             self.assertIn("MIT License", archive.read("LICENSE").decode())
             self.assertFalse(any(canary.encode() in archive.read(name) for name in archive.namelist()))
-            self.assertEqual(json.loads(archive.read("plugin.json"))["Version"], "0.2.7")
+            self.assertEqual(json.loads(archive.read("plugin.json"))["Version"], "0.2.8")
         self.assertEqual((self.base / "config.json").read_text(), canary)
 
     def test_missing_file_does_not_create_partial_release(self):

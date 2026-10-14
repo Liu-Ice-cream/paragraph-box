@@ -4,7 +4,7 @@
   "Name": "段落匣 · ParagraphBox",
   "Description": "本地 Markdown/TXT 段落搜索，支持目录别名和带出处摘录。",
   "Author": "Liu-Ice-cream",
-  "Version": "0.2.7",
+  "Version": "0.2.8",
   "Language": "python",
   "IcoPath": "Images\\app.svg",
   "ExecuteFileName": "main.py"
